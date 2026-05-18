@@ -1,14 +1,11 @@
 import { defineConfig } from "vitest/config";
-import { fileURLToPath } from "url";
 import path from "path";
-
-const root = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
     resolve: {
         alias: {
-            "@contracts": path.resolve(root, "target/types"),
-            "@idl": path.resolve(root, "target/idl"),
+            "@contracts": path.resolve("target/types"),
+            "@idl": path.resolve("target/idl"),
         },
     },
     test: {
