@@ -10,7 +10,7 @@ use anchor_spl::{
 use crate::{
     constants::{CONFIG_SEED, LP_SEED, PRECISION},
     error::AmmError,
-    state::Config,
+    state::{Config, Side},
 };
 
 #[derive(Accounts)]
@@ -120,20 +120,20 @@ impl<'info> Deposit<'info> {
                 (amounts.x, amounts.y)
             };
 
-        self.deposit_tokens(true, x)?;
-        self.deposit_tokens(false, y)?;
+        self.deposit_tokens(Side::A, x)?;
+        self.deposit_tokens(Side::B, y)?;
         self.mint_lp_tokens(amount)
     }
 
-    fn deposit_tokens(&self, is_a: bool, amount: u64) -> Result<()> {
-        let (from, to, mint, decimals) = match is_a {
-            true => (
+    fn deposit_tokens(&self, side: Side, amount: u64) -> Result<()> {
+        let (from, to, mint, decimals) = match side {
+            Side::A => (
                 self.user_a.to_account_info(),
                 self.vault_a.to_account_info(),
                 self.mint_a.to_account_info(),
                 self.mint_a.decimals,
             ),
-            false => (
+            Side::B => (
                 self.user_b.to_account_info(),
                 self.vault_b.to_account_info(),
                 self.mint_b.to_account_info(),

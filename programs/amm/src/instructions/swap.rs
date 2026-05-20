@@ -95,7 +95,6 @@ impl<'info> Swap<'info> {
     pub fn swap(&mut self, direction: SwapDirection, amount: u64, min: u64) -> Result<()> {
         require!(!self.config.locked, AmmError::PoolLocked);
         require!(amount > 0, AmmError::InvalidAmount);
-
         require!(
             self.vault_a.amount > 0 && self.vault_b.amount > 0,
             AmmError::NoLiquidity

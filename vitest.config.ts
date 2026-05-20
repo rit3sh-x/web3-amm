@@ -4,12 +4,12 @@ import path from "path";
 export default defineConfig({
     resolve: {
         alias: {
-            "@contracts": path.resolve("target/types"),
-            "@idl": path.resolve("target/idl"),
+            "@contracts": path.resolve(__dirname, "target/types"),
+            "@idl": path.resolve(__dirname, "target/idl"),
         },
     },
     test: {
-        include: ["tests/amm_*.ts"],
+        include: ["tests/*.test.ts"],
         testTimeout: 1_000_000,
         hookTimeout: 1_000_000,
         fileParallelism: false,

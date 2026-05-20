@@ -10,7 +10,7 @@ use anchor_spl::{
 use crate::{
     constants::{CONFIG_SEED, LP_SEED, PRECISION},
     error::AmmError,
-    state::Config,
+    state::{Config, Side},
 };
 
 #[derive(Accounts)]
@@ -93,10 +93,11 @@ pub struct Withdraw<'info> {
 }
 
 impl<'info> Withdraw<'info> {
-    pub fn withdraw(&mut self, amount: u64, min_x: u64, min_y: u64) -> Result<()> {
+    pub fn withdraw(&mut self, amount: u64, min_a: u64, min_b: u64) -> Result<()> {
         require!(!self.config.locked, AmmError::PoolLocked);
         require!(amount > 0, AmmError::InvalidAmount);
         require!(self.mint_lp.supply > 0, AmmError::NoLiquidity);
+        require!(amount <= self.user_lp.amount, AmmError::InsufficientBalance);
 
         let amounts = ConstantProduct::xy_withdraw_amounts_from_l(
             self.vault_a.amount,
@@ -108,25 +109,24 @@ impl<'info> Withdraw<'info> {
         .map_err(AmmError::from)?;
 
         require!(
-            amounts.x >= min_x && amounts.y >= min_y,
+            amounts.x >= min_a && amounts.y >= min_b,
             AmmError::SlippageExceeded
         );
 
         self.burn_lp_tokens(amount)?;
-
-        self.withdraw_tokens(true, amounts.x)?;
-        self.withdraw_tokens(false, amounts.y)
+        self.withdraw_tokens(Side::A, amounts.x)?;
+        self.withdraw_tokens(Side::B, amounts.y)
     }
 
-    pub fn withdraw_tokens(&self, is_a: bool, amount: u64) -> Result<()> {
-        let (from, to, mint, decimals) = match is_a {
-            true => (
+    fn withdraw_tokens(&self, side: Side, amount: u64) -> Result<()> {
+        let (from, to, mint, decimals) = match side {
+            Side::A => (
                 self.vault_a.to_account_info(),
                 self.user_a.to_account_info(),
                 self.mint_a.to_account_info(),
                 self.mint_a.decimals,
             ),
-            false => (
+            Side::B => (
                 self.vault_b.to_account_info(),
                 self.user_b.to_account_info(),
                 self.mint_b.to_account_info(),
@@ -153,7 +153,7 @@ impl<'info> Withdraw<'info> {
         transfer_checked(cpi_ctx, amount, decimals)
     }
 
-    pub fn burn_lp_tokens(&self, amount: u64) -> Result<()> {
+    fn burn_lp_tokens(&self, amount: u64) -> Result<()> {
         let cpi_accounts = Burn {
             authority: self.user.to_account_info(),
             from: self.user_lp.to_account_info(),

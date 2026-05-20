@@ -22,3 +22,9 @@ impl Config {
         Ok(())
     }
 }
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    A,
+    B,
+}

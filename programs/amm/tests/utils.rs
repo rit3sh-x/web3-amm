@@ -361,12 +361,43 @@ impl AmmAccounts {
     pub fn set_locked_ix(&self, authority: Pubkey, locked: bool) -> Instruction {
         Instruction {
             program_id: amm::id(),
-            accounts: amm::accounts::SetLocked {
+            accounts: amm::accounts::Admin {
                 config: self.config,
                 authority,
             }
             .to_account_metas(None),
             data: amm::instruction::SetLocked { locked }.data(),
+        }
+    }
+
+    pub fn set_fee_ix(&self, authority: Pubkey, fee: u16) -> Instruction {
+        Instruction {
+            program_id: amm::id(),
+            accounts: amm::accounts::Admin {
+                config: self.config,
+                authority,
+            }
+            .to_account_metas(None),
+            data: amm::instruction::SetFee { fee }.data(),
+        }
+    }
+
+    pub fn set_authority_ix(
+        &self,
+        authority: Pubkey,
+        new_authority: Option<Pubkey>,
+    ) -> Instruction {
+        Instruction {
+            program_id: amm::id(),
+            accounts: amm::accounts::Admin {
+                config: self.config,
+                authority,
+            }
+            .to_account_metas(None),
+            data: amm::instruction::SetAuthority {
+                authority: new_authority,
+            }
+            .data(),
         }
     }
 }

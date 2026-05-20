@@ -21,6 +21,7 @@ flowchart LR
 ```
 
 ## Program instructions
+
 - `init`: create a new pool `Config` PDA, initialize LP mint (`mint_lp`) and token vaults (`vault_a`, `vault_b`). `fee` is in bps and `authority` is an optional admin key.
 - `deposit`: deposit tokens into the pool. `amount` is the amount of LP tokens to mint (when creating liquidity) or desired LP amount to receive; `max_x`/`max_y` are the maximum token A/B the caller is willing to deposit (slippage protection).
 - `withdraw`: burn `amount` LP tokens to withdraw underlying token amounts; `min_x`/`min_y` are minimum acceptable outputs.

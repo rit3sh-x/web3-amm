@@ -33,7 +33,15 @@ pub mod amm {
         ctx.accounts.swap(direction, amount, min)
     }
 
-    pub fn set_locked(ctx: Context<SetLocked>, locked: bool) -> Result<()> {
+    pub fn set_locked(ctx: Context<Admin>, locked: bool) -> Result<()> {
         ctx.accounts.set_locked(locked)
+    }
+
+    pub fn set_fee(ctx: Context<Admin>, fee: u16) -> Result<()> {
+        ctx.accounts.set_fee(fee)
+    }
+
+    pub fn set_authority(ctx: Context<Admin>, authority: Option<Pubkey>) -> Result<()> {
+        ctx.accounts.set_authority(authority)
     }
 }

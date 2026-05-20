@@ -417,6 +417,26 @@ export class AmmAccounts {
             })
             .instruction();
     }
+
+    setFeeIx(authority: PublicKey, fee: number) {
+        return program.methods
+            .setFee(fee)
+            .accountsStrict({
+                config: this.config,
+                authority,
+            })
+            .instruction();
+    }
+
+    setAuthorityIx(authority: PublicKey, newAuthority: PublicKey | null) {
+        return program.methods
+            .setAuthority(newAuthority)
+            .accountsStrict({
+                config: this.config,
+                authority,
+            })
+            .instruction();
+    }
 }
 
 export const freshPool = async (fee: number) => {
