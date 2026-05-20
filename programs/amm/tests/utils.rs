@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use {
-    amm::{SwapDirection, CONFIG_SEED, LP_SEED},
+    amm::{error::AmmError, SwapDirection, CONFIG_SEED, LP_SEED},
     anchor_lang::{
         prelude::*,
         solana_program::{instruction::Instruction, program_pack::Pack},
@@ -242,8 +242,11 @@ impl AmmAccounts {
         }
     }
 
-    pub fn k(&self, svm: &LiteSVM) -> u128 {
-        token_balance(svm, &self.vault_a) as u128 * token_balance(svm, &self.vault_b) as u128
+    pub fn k(&self, svm: &LiteSVM) -> Result<u128> {
+        let a = token_balance(svm, &self.vault_a) as u128;
+        let b = token_balance(svm, &self.vault_b) as u128;
+
+        Ok(a.checked_mul(b).ok_or(AmmError::MathOverflow).unwrap())
     }
 
     pub fn init_ix(&self, fee: u16, authority: Option<Pubkey>) -> Instruction {

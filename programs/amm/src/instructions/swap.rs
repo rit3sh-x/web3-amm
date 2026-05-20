@@ -1,4 +1,3 @@
-use crate::utils::math::{ConstantProduct, LiquidityPair};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{
     transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
@@ -7,7 +6,7 @@ use anchor_spl::token_interface::{
 use crate::{
     constants::{CONFIG_SEED, LP_SEED},
     error::AmmError,
-    state::Config,
+    state::Config, utils::cmm::{CMM, LiquidityPair},
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -100,12 +99,10 @@ impl<'info> Swap<'info> {
             AmmError::NoLiquidity
         );
 
-        let mut curve = ConstantProduct::init(
+        let mut curve = CMM::initialize_cmm(
             self.vault_a.amount,
             self.vault_b.amount,
-            self.mint_lp.supply,
             self.config.fee,
-            Some(6),
         )
         .map_err(AmmError::from)?;
 

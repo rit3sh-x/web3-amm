@@ -83,12 +83,12 @@ fn multi_trader_atob_flow_earns_lp_fees() {
         (&bob, 9_000_000),
         (&alice, 21_000_000),
     ];
-    let mut k = amm.k(&svm);
+    let mut k = amm.k(&svm).unwrap();
     for (trader, amt) in trades {
         let swap_ix = amm.swap_ix(trader, SwapDirection::AtoB, amt, 1);
         let result = send_instruction(&mut svm, &trader.kp, swap_ix);
         assert_ok(result);
-        let k_new = amm.k(&svm);
+        let k_new = amm.k(&svm).unwrap();
         assert!(
             k_new >= k,
             "k should never decrease: before={k} after={k_new}"

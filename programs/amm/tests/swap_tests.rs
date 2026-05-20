@@ -15,7 +15,7 @@ fn swap_a_to_b_grows_invariant() {
     let result = send_instruction(&mut svm, &lp.kp, deposit_ix);
     assert_ok(result);
 
-    let k_before = amm.k(&svm);
+    let k_before = amm.k(&svm).unwrap();
     let amount_in = 10_000_000u64;
     let swap_ix = amm.swap_ix(&trader, SwapDirection::AtoB, amount_in, 1);
     let result = send_instruction(&mut svm, &trader.kp, swap_ix);
@@ -28,7 +28,7 @@ fn swap_a_to_b_grows_invariant() {
     assert_eq!(token_balance(&svm, &amm.vault_b), l - got_b);
 
     assert!(
-        amm.k(&svm) > k_before,
+        amm.k(&svm).unwrap() > k_before,
         "constant product must grow as fees accrue"
     );
     assert_token_conservation(&svm, &amm, &[&lp, &trader]);
@@ -99,12 +99,12 @@ fn swap_btoa_must_not_decrease_k() {
     let result = send_instruction(&mut svm, &lp.kp, deposit_ix);
     assert_ok(result);
 
-    let k_before = amm.k(&svm);
+    let k_before = amm.k(&svm).unwrap();
     let swap_ix = amm.swap_ix(&trader, SwapDirection::BtoA, 8_000_000, 1);
     let result = send_instruction(&mut svm, &trader.kp, swap_ix);
     assert_ok(result);
 
-    let k_after = amm.k(&svm);
+    let k_after = amm.k(&svm).unwrap();
 
     assert!(
         k_after >= k_before,

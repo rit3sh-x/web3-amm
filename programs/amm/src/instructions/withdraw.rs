@@ -1,4 +1,3 @@
-use crate::utils::math::ConstantProduct;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
@@ -11,6 +10,7 @@ use crate::{
     constants::{CONFIG_SEED, LP_SEED, PRECISION},
     error::AmmError,
     state::{Config, Side},
+    utils::cmm::CMM,
 };
 
 #[derive(Accounts)]
@@ -99,7 +99,7 @@ impl<'info> Withdraw<'info> {
         require!(self.mint_lp.supply > 0, AmmError::NoLiquidity);
         require!(amount <= self.user_lp.amount, AmmError::InsufficientBalance);
 
-        let amounts = ConstantProduct::xy_withdraw_amounts_from_l(
+        let amounts = CMM::withdraw(
             self.vault_a.amount,
             self.vault_b.amount,
             self.mint_lp.supply,

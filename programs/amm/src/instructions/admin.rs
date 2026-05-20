@@ -1,10 +1,7 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token_2022::spl_token_2022::extension::transfer_fee::MAX_FEE_BASIS_POINTS;
 
-use crate::{
-    constants::{CONFIG_SEED, MAX_FEE_BPS},
-    error::AmmError,
-    state::Config,
-};
+use crate::{constants::CONFIG_SEED, error::AmmError, state::Config};
 
 #[derive(Accounts)]
 pub struct Admin<'info> {
@@ -30,7 +27,7 @@ impl<'info> Admin<'info> {
     pub fn set_fee(&mut self, fee: u16) -> Result<()> {
         self.config.require_authority(&self.authority.key())?;
 
-        require!(fee < MAX_FEE_BPS, AmmError::InvalidFee);
+        require!(fee < MAX_FEE_BASIS_POINTS, AmmError::InvalidFee);
 
         self.config.fee = fee;
 

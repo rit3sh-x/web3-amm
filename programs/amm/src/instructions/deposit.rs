@@ -1,4 +1,3 @@
-use crate::utils::math::ConstantProduct;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
@@ -11,6 +10,7 @@ use crate::{
     constants::{CONFIG_SEED, LP_SEED, PRECISION},
     error::AmmError,
     state::{Config, Side},
+    utils::cmm::CMM,
 };
 
 #[derive(Accounts)]
@@ -103,7 +103,7 @@ impl<'info> Deposit<'info> {
                 require!(max_a > 0 && max_b > 0, AmmError::InvalidAmount);
                 (max_a, max_b)
             } else {
-                let amounts = ConstantProduct::xy_deposit_amounts_from_l(
+                let amounts = CMM::deposit(
                     self.vault_a.amount,
                     self.vault_b.amount,
                     self.mint_lp.supply,

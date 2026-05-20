@@ -2,13 +2,16 @@ use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
     token_2022::spl_token_2022::{
-        extension::{BaseStateWithExtensions, ExtensionType, StateWithExtensions},
+        extension::{
+            transfer_fee::MAX_FEE_BASIS_POINTS, BaseStateWithExtensions, ExtensionType,
+            StateWithExtensions,
+        },
         state::Mint as MintState,
     },
     token_interface::{Mint, TokenAccount, TokenInterface},
 };
 
-use crate::constants::{CONFIG_SEED, LP_SEED, MAX_FEE_BPS};
+use crate::constants::{CONFIG_SEED, LP_SEED};
 use crate::error::AmmError;
 use crate::state::Config;
 
@@ -82,7 +85,7 @@ impl<'info> Init<'info> {
         authority: Option<Pubkey>,
         bumps: &InitBumps,
     ) -> Result<()> {
-        require!(fee < MAX_FEE_BPS, AmmError::InvalidFee);
+        require!(fee < MAX_FEE_BASIS_POINTS, AmmError::InvalidFee);
 
         Self::assert_supported_mint(&self.mint_a.to_account_info())?;
         Self::assert_supported_mint(&self.mint_b.to_account_info())?;
