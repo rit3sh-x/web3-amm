@@ -4,7 +4,7 @@ use amm::error::AmmError;
 use utils::*;
 
 #[test]
-fn first_deposit_sets_reserves_and_mints_lp() {
+fn first_deposit_sets_reserves_and_position() {
     let (mut svm, mut amm) = fresh_pool(300);
     let lp = amm.new_user(&mut svm, MINT_AMOUNT, MINT_AMOUNT);
 
@@ -13,10 +13,19 @@ fn first_deposit_sets_reserves_and_mints_lp() {
     let result = send_instruction(&mut svm, &lp.kp, deposit_ix);
     assert_ok(result);
 
+    let cfg = amm_state(&svm, &amm.config);
+    assert_eq!(cfg.reserve_a, l);
+    assert_eq!(cfg.reserve_b, l);
+    assert_eq!(cfg.total_liquidity, l);
     assert_eq!(token_balance(&svm, &amm.vault_a), l);
     assert_eq!(token_balance(&svm, &amm.vault_b), l);
-    assert_eq!(mint_supply(&svm, &amm.mint_lp), l);
-    assert_eq!(token_balance(&svm, &lp.ata_lp), l);
+
+    let pos = position_state(&svm, &lp.position).expect("position should exist");
+    assert_eq!(pos.owner, lp.pubkey());
+    assert_eq!(pos.liquidity, l);
+    assert_eq!(pos.fee_owed_a, 0);
+    assert_eq!(pos.fee_owed_b, 0);
+
     assert_eq!(token_balance(&svm, &lp.ata_a), MINT_AMOUNT - l);
     assert_eq!(token_balance(&svm, &lp.ata_b), MINT_AMOUNT - l);
     assert_token_conservation(&svm, &amm, &[&lp]);
@@ -48,8 +57,11 @@ fn second_deposit_is_proportional() {
     let result = send_instruction(&mut svm, &lp2.kp, deposit_ix);
     assert_ok(result);
 
-    assert_eq!(mint_supply(&svm, &amm.mint_lp), l0 + l1);
-    assert_eq!(token_balance(&svm, &lp2.ata_lp), l1);
+    let cfg = amm_state(&svm, &amm.config);
+    assert_eq!(cfg.total_liquidity, l0 + l1);
+
+    let pos2 = position_state(&svm, &lp2.position).expect("position should exist");
+    assert_eq!(pos2.liquidity, l1);
 
     let pulled_a = MINT_AMOUNT
         .checked_sub(token_balance(&svm, &lp2.ata_a))
@@ -77,4 +89,29 @@ fn deposit_respects_max_slippage() {
     let deposit_ix = amm.deposit_ix(&lp2, 100_000_000, 1, 1);
     let result = send_instruction(&mut svm, &lp2.kp, deposit_ix);
     assert_error(result, AmmError::SlippageExceeded);
+}
+
+#[test]
+fn deposit_adds_to_existing_position() {
+    let (mut svm, mut amm) = fresh_pool(300);
+    let lp = amm.new_user(&mut svm, MINT_AMOUNT, MINT_AMOUNT);
+
+    let l0 = 200_000_000u64;
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp.kp,
+        amm.deposit_ix(&lp, l0, l0, l0),
+    ));
+
+    let l1 = 100_000_000u64;
+    let cap = l1.checked_mul(2).unwrap();
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp.kp,
+        amm.deposit_ix(&lp, l1, cap, cap),
+    ));
+
+    let pos = position_state(&svm, &lp.position).expect("position should exist");
+    assert_eq!(pos.liquidity, l0 + l1);
+    assert_eq!(amm_state(&svm, &amm.config).total_liquidity, l0 + l1);
 }

@@ -4,9 +4,10 @@ use anchor_spl::token_interface::{
 };
 
 use crate::{
-    constants::{CONFIG_SEED, LP_SEED},
+    constants::CONFIG_SEED,
     error::AmmError,
-    state::Config, utils::cmm::{CMM, LiquidityPair},
+    state::Config,
+    utils::cpmm::{fee_growth_delta, LiquidityPair, CMM},
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,13 +42,6 @@ pub struct Swap<'info> {
     pub mint_b: Box<InterfaceAccount<'info, Mint>>,
 
     #[account(
-        seeds = [LP_SEED, config.key().as_ref()],
-        bump = config.lp_bump,
-        mint::token_program = token_program,
-    )]
-    pub mint_lp: Box<InterfaceAccount<'info, Mint>>,
-
-    #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = config,
@@ -64,6 +58,7 @@ pub struct Swap<'info> {
     pub vault_b: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
+        mut,
         has_one = mint_a,
         has_one = mint_b,
         seeds = [CONFIG_SEED, config.seed.to_le_bytes().as_ref()],
@@ -94,14 +89,15 @@ impl<'info> Swap<'info> {
     pub fn swap(&mut self, direction: SwapDirection, amount: u64, min: u64) -> Result<()> {
         require!(!self.config.locked, AmmError::PoolLocked);
         require!(amount > 0, AmmError::InvalidAmount);
+        require!(self.config.total_liquidity > 0, AmmError::NoLiquidity);
         require!(
-            self.vault_a.amount > 0 && self.vault_b.amount > 0,
+            self.config.reserve_a > 0 && self.config.reserve_b > 0,
             AmmError::NoLiquidity
         );
 
         let mut curve = CMM::initialize_cmm(
-            self.vault_a.amount,
-            self.vault_b.amount,
+            self.config.reserve_a,
+            self.config.reserve_b,
             self.config.fee,
         )
         .map_err(AmmError::from)?;
@@ -109,6 +105,21 @@ impl<'info> Swap<'info> {
         let swap_result = curve
             .swap(direction.into(), amount, min)
             .map_err(AmmError::from)?;
+
+        let delta = fee_growth_delta(swap_result.fee, self.config.total_liquidity)
+            .map_err(AmmError::from)?;
+
+        match direction {
+            SwapDirection::AtoB => {
+                self.config.fee_growth_a = self.config.fee_growth_a.wrapping_add(delta);
+            }
+            SwapDirection::BtoA => {
+                self.config.fee_growth_b = self.config.fee_growth_b.wrapping_add(delta);
+            }
+        }
+
+        self.config.reserve_a = curve.a;
+        self.config.reserve_b = curve.b;
 
         self.transfer_in(direction, swap_result.deposit)?;
         self.transfer_out(direction, swap_result.withdraw)

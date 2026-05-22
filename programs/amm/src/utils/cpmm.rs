@@ -19,6 +19,31 @@ macro_rules! swap_slippage {
     };
 }
 
+const FEE_GROWTH_SCALE: u128 = 1u128 << 64;
+
+pub fn narrow_u64(n: u128) -> Result<u64, CurveError> {
+    n.try_into().map_err(|_| CurveError::Overflow)
+}
+
+pub fn fee_growth_delta(fee: u64, total_liquidity: u64) -> Result<u128, CurveError> {
+    if total_liquidity == 0 {
+        return Err(CurveError::ZeroBalance);
+    }
+    (fee as u128)
+        .checked_mul(FEE_GROWTH_SCALE)
+        .ok_or(CurveError::Overflow)?
+        .checked_div(total_liquidity as u128)
+        .ok_or(CurveError::Overflow)
+}
+
+pub fn fee_owed(liquidity: u64, growth: u128, snapshot: u128) -> Result<u64, CurveError> {
+    let diff = growth.wrapping_sub(snapshot);
+    let product = (liquidity as u128)
+        .checked_mul(diff)
+        .ok_or(CurveError::Overflow)?;
+    narrow_u64(product.checked_div(FEE_GROWTH_SCALE).unwrap())
+}
+
 #[derive(Debug)]
 pub enum LiquidityPair {
     X,
@@ -90,20 +115,24 @@ impl CMM {
             .ok_or(CurveError::Overflow)?
             .checked_div(lp as u128)
             .ok_or(CurveError::Overflow)?;
-        let deposit_x = (a as u128)
-            .checked_mul(ratio)
-            .ok_or(CurveError::Overflow)?
-            .checked_div(precision as u128)
-            .ok_or(CurveError::Overflow)?
-            .checked_sub(a as u128)
-            .ok_or(CurveError::Overflow)? as u64;
-        let deposit_y = (b as u128)
-            .checked_mul(ratio)
-            .ok_or(CurveError::Overflow)?
-            .checked_div(precision as u128)
-            .ok_or(CurveError::Overflow)?
-            .checked_sub(b as u128)
-            .ok_or(CurveError::Overflow)? as u64;
+        let deposit_x = narrow_u64(
+            (a as u128)
+                .checked_mul(ratio)
+                .ok_or(CurveError::Overflow)?
+                .checked_div(precision as u128)
+                .ok_or(CurveError::Overflow)?
+                .checked_sub(a as u128)
+                .ok_or(CurveError::Overflow)?,
+        )?;
+        let deposit_y = narrow_u64(
+            (b as u128)
+                .checked_mul(ratio)
+                .ok_or(CurveError::Overflow)?
+                .checked_div(precision as u128)
+                .ok_or(CurveError::Overflow)?
+                .checked_sub(b as u128)
+                .ok_or(CurveError::Overflow)?,
+        )?;
         Ok(XYAmounts {
             x: deposit_x,
             y: deposit_y,
@@ -128,25 +157,29 @@ impl CMM {
             .checked_div(lp as u128)
             .ok_or(CurveError::Overflow)?;
 
-        let withdraw_x = (a as u128)
-            .checked_sub(
-                (a as u128)
-                    .checked_mul(ratio)
-                    .ok_or(CurveError::Overflow)?
-                    .checked_div(precision as u128)
-                    .ok_or(CurveError::Overflow)?,
-            )
-            .ok_or(CurveError::Overflow)? as u64;
+        let withdraw_x = narrow_u64(
+            (a as u128)
+                .checked_sub(
+                    (a as u128)
+                        .checked_mul(ratio)
+                        .ok_or(CurveError::Overflow)?
+                        .checked_div(precision as u128)
+                        .ok_or(CurveError::Overflow)?,
+                )
+                .ok_or(CurveError::Overflow)?,
+        )?;
 
-        let withdraw_y = (b as u128)
-            .checked_sub(
-                (b as u128)
-                    .checked_mul(ratio)
-                    .ok_or(CurveError::Overflow)?
-                    .checked_div(precision as u128)
-                    .ok_or(CurveError::Overflow)?,
-            )
-            .ok_or(CurveError::Overflow)? as u64;
+        let withdraw_y = narrow_u64(
+            (b as u128)
+                .checked_sub(
+                    (b as u128)
+                        .checked_mul(ratio)
+                        .ok_or(CurveError::Overflow)?
+                        .checked_div(precision as u128)
+                        .ok_or(CurveError::Overflow)?,
+                )
+                .ok_or(CurveError::Overflow)?,
+        )?;
 
         Ok(XYAmounts {
             x: withdraw_x,
@@ -163,23 +196,25 @@ impl CMM {
         let fee_factor = (MAX_FEE_BASIS_POINTS as u128)
             .checked_sub(self.fee as u128)
             .ok_or(CurveError::Underflow)?;
-        let after_fee = (amount as u128)
-            .checked_mul(fee_factor)
-            .ok_or(CurveError::Overflow)?
-            .checked_div(MAX_FEE_BASIS_POINTS as u128)
-            .ok_or(CurveError::Overflow)? as u64;
+        let after_fee = narrow_u64(
+            (amount as u128)
+                .checked_mul(fee_factor)
+                .ok_or(CurveError::Overflow)?
+                .checked_div(MAX_FEE_BASIS_POINTS as u128)
+                .ok_or(CurveError::Overflow)?,
+        )?;
 
         let (new_a, new_b, withdraw) = match pair {
             LiquidityPair::X => {
                 let new_a = self.a.checked_add(after_fee).ok_or(CurveError::Overflow)?;
-                let new_b = Self::other_side(self.a, self.b, after_fee)?;
-                let delta_b = self.b.checked_sub(new_b).ok_or(CurveError::Overflow)?;
+                let delta_b = Self::amount_out(self.a, self.b, after_fee)?;
+                let new_b = self.b.checked_sub(delta_b).ok_or(CurveError::Underflow)?;
                 (new_a, new_b, delta_b)
             }
             LiquidityPair::Y => {
                 let new_b = self.b.checked_add(after_fee).ok_or(CurveError::Overflow)?;
-                let new_a = Self::other_side(self.b, self.a, after_fee)?;
-                let delta_a = self.a.checked_sub(new_a).ok_or(CurveError::Overflow)?;
+                let delta_a = Self::amount_out(self.b, self.a, after_fee)?;
+                let new_a = self.a.checked_sub(delta_a).ok_or(CurveError::Underflow)?;
                 (new_a, new_b, delta_a)
             }
         };
@@ -197,19 +232,15 @@ impl CMM {
         })
     }
 
-    fn other_side(in_side: u64, out_side: u64, amount: u64) -> Result<u64, CurveError> {
-        let k = Self::k(in_side, out_side)?;
+    fn amount_out(in_side: u64, out_side: u64, amount_in: u64) -> Result<u64, CurveError> {
+        assert_non_zero!([in_side, out_side]);
         let new_in = (in_side as u128)
-            .checked_add(amount as u128)
+            .checked_add(amount_in as u128)
             .ok_or(CurveError::Overflow)?;
-        Ok(k.checked_div(new_in).ok_or(CurveError::Overflow)? as u64)
-    }
-
-    fn k(a: u64, b: u64) -> Result<u128, CurveError> {
-        assert_non_zero!([a, b]);
-        (a as u128)
-            .checked_mul(b as u128)
-            .ok_or(CurveError::Overflow)
+        let numerator = (amount_in as u128)
+            .checked_mul(out_side as u128)
+            .ok_or(CurveError::Overflow)?;
+        narrow_u64(numerator.checked_div(new_in).ok_or(CurveError::Overflow)?)
     }
 }
 
@@ -280,6 +311,43 @@ mod tests {
             CMM::initialize_cmm(10, 0, 0),
             Err(CurveError::ZeroBalance)
         ));
+    }
+
+    #[test]
+    fn swap_never_decreases_k_under_truncation() {
+        let mut c = CMM::initialize_cmm(100, 100, 0).unwrap();
+
+        let k_before = (c.a as u128).checked_mul(c.b as u128).unwrap();
+
+        let res = c.swap(LiquidityPair::X, 3, 1).unwrap();
+
+        let k_after = (c.a as u128).checked_mul(c.b as u128).unwrap();
+
+        assert!(
+            k_after >= k_before,
+            "k must never decrease: before={k_before} after={k_after}"
+        );
+
+        assert_eq!(res.withdraw, 2, "amount_out must round down (V2 formula)");
+    }
+
+    #[test]
+    fn swap_y_never_decreases_k_under_truncation() {
+        let mut c = CMM::initialize_cmm(100, 100, 0).unwrap();
+
+        let k_before = (c.a as u128).checked_mul(c.b as u128).unwrap();
+
+        c.swap(LiquidityPair::Y, 7, 1).unwrap();
+
+        let k_after = (c.a as u128).checked_mul(c.b as u128).unwrap();
+
+        assert!(k_after >= k_before);
+    }
+
+    #[test]
+    fn deposit_rejects_u64_truncation() {
+        let err = CMM::deposit(u64::MAX, u64::MAX, 1, u64::MAX, 1_000_000).unwrap_err();
+        assert!(matches!(err, CurveError::Overflow));
     }
 
     #[test]

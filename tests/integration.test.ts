@@ -3,8 +3,8 @@ import {
     MINT_AMOUNT,
     Trade,
     assertTokenConservation,
+    depositHelper,
     freshPool,
-    mintSupply,
     sendTransaction,
     tokenBalance,
 } from "./utils";
@@ -30,7 +30,8 @@ describe("integration", () => {
             lp2.kp,
             new Transaction().add(await amm.depositIx(lp2, l1, l1 * 2, l1 * 2))
         );
-        expect(await mintSupply(amm.mintLp)).toBe(l0 + l1);
+        const cfg = await amm.ammState();
+        expect(cfg.totalLiquidity.toString()).toBe((l0 + l1).toString());
 
         const trades: Array<Trade> = [
             [alice, { atoB: {} }, 12_000_000],
@@ -51,19 +52,34 @@ describe("integration", () => {
             await assertTokenConservation(amm, all);
         }
 
-        const lp1_bal = await tokenBalance(lp1.ataLp);
-        const lp2_bal = await tokenBalance(lp2.ataLp);
+        const pos1 = await amm.positionState(lp1.pubkey());
+        const pos2 = await amm.positionState(lp2.pubkey());
 
         await sendTransaction(
             lp1.kp,
-            new Transaction().add(await amm.withdrawIx(lp1, lp1_bal, 0, 0))
+            new Transaction().add(
+                await amm.withdrawIx(
+                    lp1,
+                    Number(pos1!.liquidity.toString()),
+                    0,
+                    0
+                )
+            )
         );
         await sendTransaction(
             lp2.kp,
-            new Transaction().add(await amm.withdrawIx(lp2, lp2_bal, 0, 0))
+            new Transaction().add(
+                await amm.withdrawIx(
+                    lp2,
+                    Number(pos2!.liquidity.toString()),
+                    0,
+                    0
+                )
+            )
         );
 
-        expect(await mintSupply(amm.mintLp)).toBe(0);
+        const cfgFinal = await amm.ammState();
+        expect(cfgFinal.totalLiquidity.toString()).toBe("0");
         await assertTokenConservation(amm, all);
     });
 
@@ -103,22 +119,40 @@ describe("integration", () => {
             k = kNew;
         }
 
+        const cfg = await amm.ammState();
+        expect(BigInt(cfg.feeGrowthA.toString())).toBeGreaterThan(0n);
+
         const all = [lp1, lp2, alice, bob];
         await assertTokenConservation(amm, all);
 
-        const lp1_bal = await tokenBalance(lp1.ataLp);
-        const lp2_bal = await tokenBalance(lp2.ataLp);
+        const pos1 = await amm.positionState(lp1.pubkey());
+        const pos2 = await amm.positionState(lp2.pubkey());
 
         await sendTransaction(
             lp1.kp,
-            new Transaction().add(await amm.withdrawIx(lp1, lp1_bal, 0, 0))
+            new Transaction().add(
+                await amm.withdrawIx(
+                    lp1,
+                    Number(pos1!.liquidity.toString()),
+                    0,
+                    0
+                )
+            )
         );
         await sendTransaction(
             lp2.kp,
-            new Transaction().add(await amm.withdrawIx(lp2, lp2_bal, 0, 0))
+            new Transaction().add(
+                await amm.withdrawIx(
+                    lp2,
+                    Number(pos2!.liquidity.toString()),
+                    0,
+                    0
+                )
+            )
         );
 
-        expect(await mintSupply(amm.mintLp)).toBe(0);
+        const cfgFinal = await amm.ammState();
+        expect(cfgFinal.totalLiquidity.toString()).toBe("0");
         await assertTokenConservation(amm, all);
 
         const lp_total_now =
@@ -128,5 +162,62 @@ describe("integration", () => {
             (await tokenBalance(lp2.ataB));
         const lp_principal = 4 * MINT_AMOUNT;
         expect(lp_total_now).toBeGreaterThan(lp_principal);
+    });
+
+    it("fee_share_is_proportional_to_liquidity", async () => {
+        const amm = await freshPool(300);
+
+        const lpBig = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
+        const lpSmall = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
+        const trader = await amm.newUser(200_000_000, 200_000_000);
+
+        const bigL = 300_000_000;
+        const smallL = 100_000_000;
+
+        await depositHelper(amm, lpBig, bigL);
+        await depositHelper(amm, lpSmall, smallL);
+
+        for (let i = 0; i < 6; i++) {
+            await sendTransaction(
+                trader.kp,
+                new Transaction().add(
+                    await amm.swapIx(trader, { atoB: {} }, 5_000_000, 1)
+                )
+            );
+            await sendTransaction(
+                trader.kp,
+                new Transaction().add(
+                    await amm.swapIx(trader, { btoA: {} }, 5_000_000, 1)
+                )
+            );
+        }
+
+        await sendTransaction(
+            lpBig.kp,
+            new Transaction().add(await amm.collectFeesIx(lpBig))
+        );
+        await sendTransaction(
+            lpSmall.kp,
+            new Transaction().add(await amm.collectFeesIx(lpSmall))
+        );
+
+        const bigA = (await tokenBalance(lpBig.ataA)) - (MINT_AMOUNT - bigL);
+        const smallA =
+            (await tokenBalance(lpSmall.ataA)) - (MINT_AMOUNT - smallL);
+        const bigB = (await tokenBalance(lpBig.ataB)) - (MINT_AMOUNT - bigL);
+        const smallB =
+            (await tokenBalance(lpSmall.ataB)) - (MINT_AMOUNT - smallL);
+
+        expect(bigA).toBeGreaterThan(0);
+        expect(smallA).toBeGreaterThan(0);
+        expect(bigB).toBeGreaterThan(0);
+        expect(smallB).toBeGreaterThan(0);
+
+        const ratioA = bigA / smallA;
+        const ratioB = bigB / smallB;
+        const expected = bigL / smallL;
+
+        expect(Math.abs(ratioA - expected)).toBeLessThan(0.05);
+        expect(Math.abs(ratioB - expected)).toBeLessThan(0.05);
     });
 });

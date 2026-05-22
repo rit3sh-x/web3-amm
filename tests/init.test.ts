@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-    AmmAccounts,
-    freshPool,
-    mintSupply,
-    sendTransaction,
-    tokenBalance,
-} from "./utils";
+import { AmmAccounts, freshPool, sendTransaction, tokenBalance } from "./utils";
 import { Transaction } from "@solana/web3.js";
 import BN from "bn.js";
 
@@ -31,7 +25,11 @@ describe("init", () => {
 
         expect(cfg.locked).toBe(false);
 
-        expect(await mintSupply(amm.mintLp)).toBe(0);
+        expect(cfg.reserveA.toString()).toBe("0");
+        expect(cfg.reserveB.toString()).toBe("0");
+        expect(cfg.totalLiquidity.toString()).toBe("0");
+        expect(cfg.feeGrowthA.toString()).toBe("0");
+        expect(cfg.feeGrowthB.toString()).toBe("0");
 
         expect(await tokenBalance(amm.vaultA)).toBe(0);
 

@@ -14,16 +14,14 @@ fn multi_user_trading_conserves_tokens() {
 
     let l0 = 400_000_000u64;
     let deposit_ix = amm.deposit_ix(&lp1, l0, l0, l0);
-    let result = send_instruction(&mut svm, &lp1.kp, deposit_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(&mut svm, &lp1.kp, deposit_ix));
 
     let l1 = 150_000_000u64;
     let two_l1 = l1.checked_mul(2).expect("l1 * 2 overflow");
 
     let deposit_ix = amm.deposit_ix(&lp2, l1, two_l1, two_l1);
-    let result = send_instruction(&mut svm, &lp2.kp, deposit_ix);
-    assert_ok(result);
-    assert_eq!(mint_supply(&svm, &amm.mint_lp), l0 + l1);
+    assert_ok(send_instruction(&mut svm, &lp2.kp, deposit_ix));
+    assert_eq!(amm_state(&svm, &amm.config).total_liquidity, l0 + l1);
 
     let trades = [
         (&alice, SwapDirection::AtoB, 12_000_000u64),
@@ -41,18 +39,22 @@ fn multi_user_trading_conserves_tokens() {
         assert_token_conservation(&svm, &amm, &all);
     }
 
-    let lp1_bal = token_balance(&svm, &lp1.ata_lp);
-    let lp2_bal = token_balance(&svm, &lp2.ata_lp);
+    let lp1_liq = position_state(&svm, &lp1.position).unwrap().liquidity;
+    let lp2_liq = position_state(&svm, &lp2.position).unwrap().liquidity;
 
-    let withdraw_ix = amm.withdraw_ix(&lp1, lp1_bal, 0, 0);
-    let result = send_instruction(&mut svm, &lp1.kp, withdraw_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp1.kp,
+        amm.withdraw_ix(&lp1, lp1_liq, 0, 0),
+    ));
 
-    let withdraw_ix = amm.withdraw_ix(&lp2, lp2_bal, 0, 0);
-    let result = send_instruction(&mut svm, &lp2.kp, withdraw_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp2.kp,
+        amm.withdraw_ix(&lp2, lp2_liq, 0, 0),
+    ));
 
-    assert_eq!(mint_supply(&svm, &amm.mint_lp), 0);
+    assert_eq!(amm_state(&svm, &amm.config).total_liquidity, 0);
     assert_token_conservation(&svm, &amm, &all);
 }
 
@@ -66,15 +68,19 @@ fn multi_trader_atob_flow_earns_lp_fees() {
     let bob = amm.new_user(&mut svm, 300_000_000, 0);
 
     let l0 = 400_000_000u64;
-    let deposit_ix = amm.deposit_ix(&lp1, l0, l0, l0);
-    let result = send_instruction(&mut svm, &lp1.kp, deposit_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp1.kp,
+        amm.deposit_ix(&lp1, l0, l0, l0),
+    ));
 
     let l1 = 150_000_000u64;
     let l1_x2 = l1.checked_mul(2).expect("l1 * 2 overflow");
-    let deposit_ix = amm.deposit_ix(&lp2, l1, l1_x2, l1_x2);
-    let result = send_instruction(&mut svm, &lp2.kp, deposit_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp2.kp,
+        amm.deposit_ix(&lp2, l1, l1_x2, l1_x2),
+    ));
 
     let trades = [
         (&alice, 12_000_000u64),
@@ -86,31 +92,39 @@ fn multi_trader_atob_flow_earns_lp_fees() {
     let mut k = amm.k(&svm).unwrap();
     for (trader, amt) in trades {
         let swap_ix = amm.swap_ix(trader, SwapDirection::AtoB, amt, 1);
-        let result = send_instruction(&mut svm, &trader.kp, swap_ix);
-        assert_ok(result);
+        assert_ok(send_instruction(&mut svm, &trader.kp, swap_ix));
         let k_new = amm.k(&svm).unwrap();
         assert!(
             k_new >= k,
-            "k should never decrease: before={k} after={k_new}"
+            "reserve k should never decrease: before={k} after={k_new}"
         );
         k = k_new;
     }
 
+    assert!(
+        amm_state(&svm, &amm.config).fee_growth_a > 0,
+        "fee growth should accumulate"
+    );
+
     let all = [&lp1, &lp2, &alice, &bob];
     assert_token_conservation(&svm, &amm, &all);
 
-    let lp1_bal = token_balance(&svm, &lp1.ata_lp);
-    let lp2_bal = token_balance(&svm, &lp2.ata_lp);
+    let lp1_liq = position_state(&svm, &lp1.position).unwrap().liquidity;
+    let lp2_liq = position_state(&svm, &lp2.position).unwrap().liquidity;
 
-    let withdraw_ix = amm.withdraw_ix(&lp1, lp1_bal, 0, 0);
-    let result = send_instruction(&mut svm, &lp1.kp, withdraw_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp1.kp,
+        amm.withdraw_ix(&lp1, lp1_liq, 0, 0),
+    ));
 
-    let withdraw_ix = amm.withdraw_ix(&lp2, lp2_bal, 0, 0);
-    let result = send_instruction(&mut svm, &lp2.kp, withdraw_ix);
-    assert_ok(result);
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp2.kp,
+        amm.withdraw_ix(&lp2, lp2_liq, 0, 0),
+    ));
 
-    assert_eq!(mint_supply(&svm, &amm.mint_lp), 0);
+    assert_eq!(amm_state(&svm, &amm.config).total_liquidity, 0);
     assert_token_conservation(&svm, &amm, &all);
 
     let lp_total_now: u128 = token_balance(&svm, &lp1.ata_a) as u128
@@ -120,8 +134,7 @@ fn multi_trader_atob_flow_earns_lp_fees() {
     let lp_principal = 4u128 * MINT_AMOUNT as u128;
     assert!(
         lp_total_now > lp_principal,
-        "LPs should have earned fees: now={lp_total_now}, principal={}",
-        lp_principal
+        "LPs should have earned fees (auto-claimed on withdraw): now={lp_total_now}, principal={lp_principal}"
     );
 
     let trader_total_now: u128 = token_balance(&svm, &alice.ata_a) as u128
@@ -131,7 +144,88 @@ fn multi_trader_atob_flow_earns_lp_fees() {
     let trader_principal = 600_000_000u128;
     assert!(
         trader_total_now < trader_principal,
-        "traders should have paid fees: now={trader_total_now}, principal={}",
-        trader_principal
+        "traders should have paid fees: now={trader_total_now}, principal={trader_principal}"
+    );
+}
+
+#[test]
+fn fee_share_is_proportional_to_liquidity() {
+    let (mut svm, mut amm) = fresh_pool(300);
+
+    let lp_big = amm.new_user(&mut svm, MINT_AMOUNT, MINT_AMOUNT);
+    let lp_small = amm.new_user(&mut svm, MINT_AMOUNT, MINT_AMOUNT);
+    let trader = amm.new_user(&mut svm, 200_000_000, 200_000_000);
+
+    let big_l = 300_000_000u64;
+    let small_l = 100_000_000u64;
+    let small_cap = small_l.checked_mul(2).unwrap();
+
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp_big.kp,
+        amm.deposit_ix(&lp_big, big_l, big_l, big_l),
+    ));
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp_small.kp,
+        amm.deposit_ix(&lp_small, small_l, small_cap, small_cap),
+    ));
+
+    for _ in 0..6 {
+        assert_ok(send_instruction(
+            &mut svm,
+            &trader.kp,
+            amm.swap_ix(&trader, SwapDirection::AtoB, 5_000_000, 1),
+        ));
+        assert_ok(send_instruction(
+            &mut svm,
+            &trader.kp,
+            amm.swap_ix(&trader, SwapDirection::BtoA, 5_000_000, 1),
+        ));
+    }
+
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp_big.kp,
+        amm.collect_fees_ix(&lp_big),
+    ));
+    assert_ok(send_instruction(
+        &mut svm,
+        &lp_small.kp,
+        amm.collect_fees_ix(&lp_small),
+    ));
+
+    let big_initial = MINT_AMOUNT.checked_sub(big_l).unwrap();
+    let small_initial = MINT_AMOUNT.checked_sub(small_l).unwrap();
+
+    let big_a = token_balance(&svm, &lp_big.ata_a)
+        .checked_sub(big_initial)
+        .unwrap();
+
+    let small_a = token_balance(&svm, &lp_small.ata_a)
+        .checked_sub(small_initial)
+        .unwrap();
+
+    let big_b = token_balance(&svm, &lp_big.ata_b)
+        .checked_sub(big_initial)
+        .unwrap();
+
+    let small_b = token_balance(&svm, &lp_small.ata_b)
+        .checked_sub(small_initial)
+        .unwrap();
+
+    assert!(big_a > 0 && small_a > 0);
+    assert!(big_b > 0 && small_b > 0);
+
+    let ratio_a = big_a as f64 / small_a as f64;
+    let ratio_b = big_b as f64 / small_b as f64;
+    let expected = big_l as f64 / small_l as f64;
+    assert!(
+        (ratio_a - expected).abs() < 0.05,
+        "fee share A ratio={ratio_a} should match liquidity ratio={expected}"
+    );
+    assert!(
+        (ratio_b - expected).abs() < 0.05,
+        "fee share B ratio={ratio_b} should match liquidity ratio={expected}"
     );
 }

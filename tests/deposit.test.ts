@@ -3,14 +3,13 @@ import {
     MINT_AMOUNT,
     assertTokenConservation,
     freshPool,
-    mintSupply,
     sendTransaction,
     tokenBalance,
 } from "./utils";
 import { Transaction } from "@solana/web3.js";
 
 describe("deposit", () => {
-    it("first deposit sets reserves and mints lp", async () => {
+    it("first deposit sets reserves and opens position", async () => {
         const amm = await freshPool(300);
 
         const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
@@ -23,12 +22,19 @@ describe("deposit", () => {
         );
 
         expect(await tokenBalance(amm.vaultA)).toBe(l);
-
         expect(await tokenBalance(amm.vaultB)).toBe(l);
 
-        expect(await mintSupply(amm.mintLp)).toBe(l);
+        const cfg = await amm.ammState();
+        expect(cfg.reserveA.toString()).toBe(l.toString());
+        expect(cfg.reserveB.toString()).toBe(l.toString());
+        expect(cfg.totalLiquidity.toString()).toBe(l.toString());
 
-        expect(await tokenBalance(lp.ataLp)).toBe(l);
+        const pos = await amm.positionState(lp.pubkey());
+        expect(pos).not.toBeNull();
+        expect(pos!.owner.toBase58()).toBe(lp.pubkey().toBase58());
+        expect(pos!.liquidity.toString()).toBe(l.toString());
+        expect(pos!.feeOwedA.toString()).toBe("0");
+        expect(pos!.feeOwedB.toString()).toBe("0");
 
         await assertTokenConservation(amm, [lp]);
     });
@@ -50,7 +56,6 @@ describe("deposit", () => {
         const amm = await freshPool(300);
 
         const lp1 = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
-
         const lp2 = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
 
         const l0 = 300_000_000;
@@ -67,9 +72,11 @@ describe("deposit", () => {
             new Transaction().add(await amm.depositIx(lp2, l1, l1 * 2, l1 * 2))
         );
 
-        expect(await mintSupply(amm.mintLp)).toBe(l0 + l1);
+        const cfg = await amm.ammState();
+        expect(cfg.totalLiquidity.toString()).toBe((l0 + l1).toString());
 
-        expect(await tokenBalance(lp2.ataLp)).toBe(l1);
+        const pos2 = await amm.positionState(lp2.pubkey());
+        expect(pos2!.liquidity.toString()).toBe(l1.toString());
 
         await assertTokenConservation(amm, [lp1, lp2]);
     });
@@ -78,7 +85,6 @@ describe("deposit", () => {
         const amm = await freshPool(300);
 
         const lp1 = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
-
         const lp2 = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
 
         const l0 = 300_000_000;
@@ -96,5 +102,29 @@ describe("deposit", () => {
                 )
             )
         ).rejects.toThrow();
+    });
+
+    it("repeat deposit grows the same position", async () => {
+        const amm = await freshPool(300);
+
+        const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
+
+        const l0 = 200_000_000;
+        await sendTransaction(
+            lp.kp,
+            new Transaction().add(await amm.depositIx(lp, l0, l0, l0))
+        );
+
+        const l1 = 100_000_000;
+        await sendTransaction(
+            lp.kp,
+            new Transaction().add(await amm.depositIx(lp, l1, l1 * 2, l1 * 2))
+        );
+
+        const pos = await amm.positionState(lp.pubkey());
+        expect(pos!.liquidity.toString()).toBe((l0 + l1).toString());
+
+        const cfg = await amm.ammState();
+        expect(cfg.totalLiquidity.toString()).toBe((l0 + l1).toString());
     });
 });

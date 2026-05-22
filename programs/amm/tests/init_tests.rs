@@ -15,7 +15,11 @@ fn init_succeeds_and_sets_config() {
     assert_eq!(cfg.mint_b, amm.mint_b);
     assert_eq!(cfg.authority, Some(amm.initializer.pubkey()));
     assert!(!cfg.locked);
-    assert_eq!(mint_supply(&svm, &amm.mint_lp), 0);
+    assert_eq!(cfg.reserve_a, 0);
+    assert_eq!(cfg.reserve_b, 0);
+    assert_eq!(cfg.total_liquidity, 0);
+    assert_eq!(cfg.fee_growth_a, 0);
+    assert_eq!(cfg.fee_growth_b, 0);
     assert_eq!(token_balance(&svm, &amm.vault_a), 0);
     assert_eq!(token_balance(&svm, &amm.vault_b), 0);
 }

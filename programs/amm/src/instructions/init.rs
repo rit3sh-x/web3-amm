@@ -11,7 +11,7 @@ use anchor_spl::{
     token_interface::{Mint, TokenAccount, TokenInterface},
 };
 
-use crate::constants::{CONFIG_SEED, LP_SEED};
+use crate::constants::CONFIG_SEED;
 use crate::error::AmmError;
 use crate::state::Config;
 
@@ -31,17 +31,6 @@ pub struct Init<'info> {
         mint::token_program = token_program
     )]
     pub mint_b: Box<InterfaceAccount<'info, Mint>>,
-
-    #[account(
-        init,
-        payer = initializer,
-        seeds = [LP_SEED, config.key().as_ref()],
-        bump,
-        mint::decimals = 6,
-        mint::authority = config,
-        mint::token_program = token_program,
-    )]
-    pub mint_lp: Box<InterfaceAccount<'info, Mint>>,
 
     #[account(
         init,
@@ -98,7 +87,11 @@ impl<'info> Init<'info> {
             fee,
             locked: false,
             config_bump: bumps.config,
-            lp_bump: bumps.mint_lp,
+            reserve_a: 0,
+            reserve_b: 0,
+            total_liquidity: 0,
+            fee_growth_a: 0,
+            fee_growth_b: 0,
         });
 
         Ok(())
@@ -121,8 +114,6 @@ impl<'info> Init<'info> {
                 ExtensionType::TransferFeeConfig
                 | ExtensionType::TransferHook
                 | ExtensionType::NonTransferable
-                | ExtensionType::DefaultAccountState
-                | ExtensionType::PermanentDelegate
                 | ExtensionType::ConfidentialTransferMint
                 | ExtensionType::ConfidentialTransferFeeConfig => {
                     return err!(AmmError::UnsupportedMintExtension);

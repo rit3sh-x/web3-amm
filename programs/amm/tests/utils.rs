@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use {
-    amm::{error::AmmError, SwapDirection, CONFIG_SEED, LP_SEED},
+    amm::{error::AmmError, SwapDirection, CONFIG_SEED, POSITION_SEED},
     anchor_lang::{
         prelude::*,
         solana_program::{instruction::Instruction, program_pack::Pack},
@@ -110,14 +110,17 @@ pub fn token_balance(svm: &LiteSVM, ata: &Pubkey) -> u64 {
     }
 }
 
-pub fn mint_supply(svm: &LiteSVM, mint: &Pubkey) -> u64 {
-    let acc = svm.get_account(mint).unwrap();
-    spl_token::state::Mint::unpack(&acc.data).unwrap().supply
-}
-
 pub fn amm_state(svm: &LiteSVM, config: &Pubkey) -> amm::state::Config {
     let account = svm.get_account(config).unwrap();
     amm::state::Config::try_deserialize(&mut account.data.as_ref()).unwrap()
+}
+
+pub fn position_state(svm: &LiteSVM, position: &Pubkey) -> Option<amm::state::Position> {
+    let account = svm.get_account(position)?;
+    if account.data.is_empty() {
+        return None;
+    }
+    amm::state::Position::try_deserialize(&mut account.data.as_ref()).ok()
 }
 
 pub fn assert_error<E>(result: TransactionResult, expected_error: E)
@@ -162,7 +165,7 @@ pub struct User {
     pub kp: Keypair,
     pub ata_a: Pubkey,
     pub ata_b: Pubkey,
-    pub ata_lp: Pubkey,
+    pub position: Pubkey,
 }
 
 impl User {
@@ -175,7 +178,6 @@ pub struct AmmAccounts {
     pub initializer: Keypair,
     pub mint_a: Pubkey,
     pub mint_b: Pubkey,
-    pub mint_lp: Pubkey,
     pub vault_a: Pubkey,
     pub vault_b: Pubkey,
     pub seed: u64,
@@ -193,7 +195,6 @@ impl AmmAccounts {
 
         let (config, _) =
             Pubkey::find_program_address(&[CONFIG_SEED, &seed.to_le_bytes()], &amm::id());
-        let (mint_lp, _) = Pubkey::find_program_address(&[LP_SEED, config.as_ref()], &amm::id());
         let vault_a = associated_token::get_associated_token_address(&config, &mint_a);
         let vault_b = associated_token::get_associated_token_address(&config, &mint_b);
 
@@ -201,7 +202,6 @@ impl AmmAccounts {
             initializer,
             mint_a,
             mint_b,
-            mint_lp,
             vault_a,
             vault_b,
             seed,
@@ -211,13 +211,21 @@ impl AmmAccounts {
         }
     }
 
+    pub fn position_pda(&self, owner: &Pubkey) -> Pubkey {
+        Pubkey::find_program_address(
+            &[POSITION_SEED, self.config.as_ref(), owner.as_ref()],
+            &amm::id(),
+        )
+        .0
+    }
+
     pub fn new_user(&mut self, svm: &mut LiteSVM, fund_a: u64, fund_b: u64) -> User {
         let kp = Keypair::new();
         airdrop_to_user(svm, &kp.pubkey());
 
         let ata_a = create_ata(svm, &self.initializer, &self.mint_a, &kp.pubkey());
         let ata_b = create_ata(svm, &self.initializer, &self.mint_b, &kp.pubkey());
-        let ata_lp = create_ata(svm, &self.initializer, &self.mint_lp, &kp.pubkey());
+        let position = self.position_pda(&kp.pubkey());
 
         if fund_a > 0 {
             mint_tokens_to_ata(svm, &self.initializer, &self.mint_a, &ata_a, fund_a);
@@ -238,15 +246,16 @@ impl AmmAccounts {
             kp,
             ata_a,
             ata_b,
-            ata_lp,
+            position,
         }
     }
 
     pub fn k(&self, svm: &LiteSVM) -> Result<u128> {
-        let a = token_balance(svm, &self.vault_a) as u128;
-        let b = token_balance(svm, &self.vault_b) as u128;
-
-        Ok(a.checked_mul(b).ok_or(AmmError::MathOverflow).unwrap())
+        let cfg = amm_state(svm, &self.config);
+        Ok((cfg.reserve_a as u128)
+            .checked_mul(cfg.reserve_b as u128)
+            .ok_or(AmmError::MathOverflow)
+            .unwrap())
     }
 
     pub fn init_ix(&self, fee: u16, authority: Option<Pubkey>) -> Instruction {
@@ -255,7 +264,6 @@ impl AmmAccounts {
             accounts: amm::accounts::Init {
                 config: self.config,
                 initializer: self.initializer.pubkey(),
-                mint_lp: self.mint_lp,
                 mint_a: self.mint_a,
                 mint_b: self.mint_b,
                 vault_a: self.vault_a,
@@ -279,11 +287,10 @@ impl AmmAccounts {
             program_id: amm::id(),
             accounts: amm::accounts::Deposit {
                 config: self.config,
-                mint_lp: self.mint_lp,
+                position: user.position,
                 user: user.pubkey(),
                 user_a: user.ata_a,
                 user_b: user.ata_b,
-                user_lp: user.ata_lp,
                 mint_a: self.mint_a,
                 mint_b: self.mint_b,
                 vault_a: self.vault_a,
@@ -313,7 +320,6 @@ impl AmmAccounts {
             program_id: amm::id(),
             accounts: amm::accounts::Swap {
                 config: self.config,
-                mint_lp: self.mint_lp,
                 user: user.pubkey(),
                 user_a: user.ata_a,
                 user_b: user.ata_b,
@@ -338,11 +344,10 @@ impl AmmAccounts {
             program_id: amm::id(),
             accounts: amm::accounts::Withdraw {
                 config: self.config,
-                mint_lp: self.mint_lp,
+                position: user.position,
                 user: user.pubkey(),
                 user_a: user.ata_a,
                 user_b: user.ata_b,
-                user_lp: user.ata_lp,
                 mint_a: self.mint_a,
                 mint_b: self.mint_b,
                 vault_a: self.vault_a,
@@ -358,6 +363,26 @@ impl AmmAccounts {
                 min_y,
             }
             .data(),
+        }
+    }
+
+    pub fn collect_fees_ix(&self, user: &User) -> Instruction {
+        Instruction {
+            program_id: amm::id(),
+            accounts: amm::accounts::CollectFees {
+                config: self.config,
+                position: user.position,
+                user: user.pubkey(),
+                user_a: user.ata_a,
+                user_b: user.ata_b,
+                mint_a: self.mint_a,
+                mint_b: self.mint_b,
+                vault_a: self.vault_a,
+                vault_b: self.vault_b,
+                token_program: TOKEN_PROGRAM_ID,
+            }
+            .to_account_metas(None),
+            data: amm::instruction::CollectFees {}.data(),
         }
     }
 

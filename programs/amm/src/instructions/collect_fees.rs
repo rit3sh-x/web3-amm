@@ -1,18 +1,16 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{
-    associated_token::AssociatedToken,
-    token_interface::{transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked},
+use anchor_spl::token_interface::{
+    transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 
 use crate::{
-    constants::{CONFIG_SEED, POSITION_SEED, PRECISION},
+    constants::{CONFIG_SEED, POSITION_SEED},
     error::AmmError,
     state::{Config, Position, Side},
-    utils::cpmm::CMM,
 };
 
 #[derive(Accounts)]
-pub struct Withdraw<'info> {
+pub struct CollectFees<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -44,7 +42,6 @@ pub struct Withdraw<'info> {
     pub vault_b: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
-        mut,
         has_one = mint_a,
         has_one = mint_b,
         seeds = [CONFIG_SEED, config.seed.to_le_bytes().as_ref()],
@@ -77,79 +74,28 @@ pub struct Withdraw<'info> {
     pub user_b: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub token_program: Interface<'info, TokenInterface>,
-
-    pub associated_token_program: Program<'info, AssociatedToken>,
-
-    pub system_program: Program<'info, System>,
 }
 
-impl<'info> Withdraw<'info> {
-    pub fn withdraw(&mut self, amount: u64, min_a: u64, min_b: u64) -> Result<()> {
+impl<'info> CollectFees<'info> {
+    pub fn collect_fees(&mut self) -> Result<()> {
         require!(!self.config.locked, AmmError::PoolLocked);
-        require!(amount > 0, AmmError::InvalidAmount);
-        require!(self.config.total_liquidity > 0, AmmError::NoLiquidity);
-        require!(
-            amount <= self.position.liquidity,
-            AmmError::InsufficientBalance
-        );
 
         self.position
             .settle(self.config.fee_growth_a, self.config.fee_growth_b)?;
 
-        let amounts = CMM::withdraw(
-            self.config.reserve_a,
-            self.config.reserve_b,
-            self.config.total_liquidity,
-            amount,
-            PRECISION,
-        )
-        .map_err(AmmError::from)?;
-
-        require!(
-            amounts.x >= min_a && amounts.y >= min_b,
-            AmmError::SlippageExceeded
-        );
-
-        self.config.reserve_a = self
-            .config
-            .reserve_a
-            .checked_sub(amounts.x)
-            .ok_or(error!(AmmError::MathOverflow))?;
-        self.config.reserve_b = self
-            .config
-            .reserve_b
-            .checked_sub(amounts.y)
-            .ok_or(error!(AmmError::MathOverflow))?;
-        self.config.total_liquidity = self
-            .config
-            .total_liquidity
-            .checked_sub(amount)
-            .ok_or(error!(AmmError::MathOverflow))?;
-        self.position.liquidity = self
-            .position
-            .liquidity
-            .checked_sub(amount)
-            .ok_or(error!(AmmError::MathOverflow))?;
-
         let fee_a = self.position.fee_owed_a;
         let fee_b = self.position.fee_owed_b;
+
+        require!(fee_a > 0 || fee_b > 0, AmmError::InvalidAmount);
+
         self.position.fee_owed_a = 0;
         self.position.fee_owed_b = 0;
 
-        let payout_a = amounts
-            .x
-            .checked_add(fee_a)
-            .ok_or(error!(AmmError::MathOverflow))?;
-        let payout_b = amounts
-            .y
-            .checked_add(fee_b)
-            .ok_or(error!(AmmError::MathOverflow))?;
-
-        self.withdraw_tokens(Side::A, payout_a)?;
-        self.withdraw_tokens(Side::B, payout_b)
+        self.payout(Side::A, fee_a)?;
+        self.payout(Side::B, fee_b)
     }
 
-    fn withdraw_tokens(&self, side: Side, amount: u64) -> Result<()> {
+    fn payout(&self, side: Side, amount: u64) -> Result<()> {
         if amount == 0 {
             return Ok(());
         }

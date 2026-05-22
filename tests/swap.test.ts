@@ -9,11 +9,10 @@ import {
 import { Transaction } from "@solana/web3.js";
 
 describe("swap", () => {
-    it("swap a to b grows invariant", async () => {
+    it("swap a to b preserves reserve k and accrues fee_growth_a", async () => {
         const amm = await freshPool(300);
 
         const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
-
         const trader = await amm.newUser(100_000_000, 0);
 
         const l = 300_000_000;
@@ -32,16 +31,18 @@ describe("swap", () => {
             )
         );
 
-        expect(await amm.k()).toBeGreaterThan(kBefore);
+        const cfg = await amm.ammState();
+        expect(await amm.k()).toBeGreaterThanOrEqual(kBefore);
+        expect(BigInt(cfg.feeGrowthA.toString())).toBeGreaterThan(0n);
+        expect(cfg.feeGrowthB.toString()).toBe("0");
 
         await assertTokenConservation(amm, [lp, trader]);
     });
 
-    it("swap b to a works", async () => {
+    it("swap b to a advances fee_growth_b only", async () => {
         const amm = await freshPool(300);
 
         const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
-
         const trader = await amm.newUser(0, 100_000_000);
 
         await sendTransaction(
@@ -58,6 +59,9 @@ describe("swap", () => {
             )
         );
 
+        const cfg = await amm.ammState();
+        expect(BigInt(cfg.feeGrowthB.toString())).toBeGreaterThan(0n);
+        expect(cfg.feeGrowthA.toString()).toBe("0");
         expect(await tokenBalance(trader.ataA)).toBeGreaterThan(0);
     });
 
@@ -65,7 +69,6 @@ describe("swap", () => {
         const amm = await freshPool(300);
 
         const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
-
         const trader = await amm.newUser(100_000_000, 0);
 
         await sendTransaction(
@@ -89,7 +92,6 @@ describe("swap", () => {
         const amm = await freshPool(300);
 
         const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
-
         const trader = await amm.newUser(100_000_000, 0);
 
         await sendTransaction(
@@ -114,7 +116,21 @@ describe("swap", () => {
         ).rejects.toThrow();
     });
 
-    it("swap_btoa_must_not_decrease_k", async () => {
+    it("swap rejects without liquidity", async () => {
+        const amm = await freshPool(300);
+        const trader = await amm.newUser(100_000_000, 100_000_000);
+
+        await expect(
+            sendTransaction(
+                trader.kp,
+                new Transaction().add(
+                    await amm.swapIx(trader, { atoB: {} }, 1000, 1)
+                )
+            )
+        ).rejects.toThrow();
+    });
+
+    it("swap btoa must not decrease k", async () => {
         const amm = await freshPool(300);
         const lp = await amm.newUser(MINT_AMOUNT, MINT_AMOUNT);
         const trader = await amm.newUser(0, 100_000_000);

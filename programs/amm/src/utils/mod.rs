@@ -1,1 +1,1 @@
-pub mod cmm;
+pub mod cpmm;

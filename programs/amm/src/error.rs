@@ -1,4 +1,4 @@
-use crate::utils::cmm::CurveError;
+use crate::utils::cpmm::CurveError;
 use anchor_lang::prelude::*;
 
 #[error_code]

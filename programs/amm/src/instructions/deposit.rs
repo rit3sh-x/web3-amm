@@ -1,16 +1,14 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token_interface::{
-        mint_to, transfer_checked, Mint, MintTo, TokenAccount, TokenInterface, TransferChecked,
-    },
+    token_interface::{transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked},
 };
 
 use crate::{
-    constants::{CONFIG_SEED, LP_SEED, PRECISION},
+    constants::{CONFIG_SEED, POSITION_SEED, PRECISION},
     error::AmmError,
-    state::{Config, Side},
-    utils::cmm::CMM,
+    state::{Config, Position, Side},
+    utils::cpmm::CMM,
 };
 
 #[derive(Accounts)]
@@ -31,14 +29,6 @@ pub struct Deposit<'info> {
 
     #[account(
         mut,
-        seeds = [LP_SEED, config.key().as_ref()],
-        bump = config.lp_bump,
-        mint::token_program = token_program,
-    )]
-    pub mint_lp: Box<InterfaceAccount<'info, Mint>>,
-
-    #[account(
-        mut,
         associated_token::mint = mint_a,
         associated_token::authority = config,
         associated_token::token_program = token_program,
@@ -54,12 +44,22 @@ pub struct Deposit<'info> {
     pub vault_b: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
+        mut,
         has_one = mint_a,
         has_one = mint_b,
         seeds = [CONFIG_SEED, config.seed.to_le_bytes().as_ref()],
         bump = config.config_bump,
     )]
     pub config: Box<Account<'info, Config>>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = Position::DISCRIMINATOR.len() + Position::INIT_SPACE,
+        seeds = [POSITION_SEED, config.key().as_ref(), user.key().as_ref()],
+        bump,
+    )]
+    pub position: Box<Account<'info, Position>>,
 
     #[account(
         mut,
@@ -77,15 +77,6 @@ pub struct Deposit<'info> {
     )]
     pub user_b: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = mint_lp,
-        associated_token::authority = user,
-        associated_token::token_program = token_program,
-    )]
-    pub user_lp: Box<InterfaceAccount<'info, TokenAccount>>,
-
     pub token_program: Interface<'info, TokenInterface>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -94,35 +85,74 @@ pub struct Deposit<'info> {
 }
 
 impl<'info> Deposit<'info> {
-    pub fn deposit(&mut self, amount: u64, max_a: u64, max_b: u64) -> Result<()> {
+    pub fn deposit(
+        &mut self,
+        amount: u64,
+        max_a: u64,
+        max_b: u64,
+        bumps: &DepositBumps,
+    ) -> Result<()> {
         require!(!self.config.locked, AmmError::PoolLocked);
         require!(amount > 0, AmmError::InvalidAmount);
 
-        let (x, y) =
-            if self.mint_lp.supply == 0 && self.vault_a.amount == 0 && self.vault_b.amount == 0 {
-                require!(max_a > 0 && max_b > 0, AmmError::InvalidAmount);
-                (max_a, max_b)
-            } else {
-                let amounts = CMM::deposit(
-                    self.vault_a.amount,
-                    self.vault_b.amount,
-                    self.mint_lp.supply,
-                    amount,
-                    PRECISION,
-                )
-                .map_err(AmmError::from)?;
+        if self.position.liquidity > 0 {
+            require_keys_eq!(self.position.owner, self.user.key(), AmmError::Unauthorized);
+            self.position
+                .settle(self.config.fee_growth_a, self.config.fee_growth_b)?;
+        } else {
+            self.position.owner = self.user.key();
+            self.position.config = self.config.key();
+            self.position.bump = bumps.position;
+            self.position.fee_growth_snapshot_a = self.config.fee_growth_a;
+            self.position.fee_growth_snapshot_b = self.config.fee_growth_b;
+        }
 
-                require!(
-                    amounts.x <= max_a && amounts.y <= max_b,
-                    AmmError::SlippageExceeded
-                );
+        let (x, y) = if self.config.total_liquidity == 0 {
+            require!(max_a > 0 && max_b > 0, AmmError::InvalidAmount);
+            (max_a, max_b)
+        } else {
+            let amounts = CMM::deposit(
+                self.config.reserve_a,
+                self.config.reserve_b,
+                self.config.total_liquidity,
+                amount,
+                PRECISION,
+            )
+            .map_err(AmmError::from)?;
 
-                (amounts.x, amounts.y)
-            };
+            require!(
+                amounts.x <= max_a && amounts.y <= max_b,
+                AmmError::SlippageExceeded
+            );
+
+            (amounts.x, amounts.y)
+        };
 
         self.deposit_tokens(Side::A, x)?;
         self.deposit_tokens(Side::B, y)?;
-        self.mint_lp_tokens(amount)
+
+        self.config.reserve_a = self
+            .config
+            .reserve_a
+            .checked_add(x)
+            .ok_or(error!(AmmError::MathOverflow))?;
+        self.config.reserve_b = self
+            .config
+            .reserve_b
+            .checked_add(y)
+            .ok_or(error!(AmmError::MathOverflow))?;
+        self.config.total_liquidity = self
+            .config
+            .total_liquidity
+            .checked_add(amount)
+            .ok_or(error!(AmmError::MathOverflow))?;
+        self.position.liquidity = self
+            .position
+            .liquidity
+            .checked_add(amount)
+            .ok_or(error!(AmmError::MathOverflow))?;
+
+        Ok(())
     }
 
     fn deposit_tokens(&self, side: Side, amount: u64) -> Result<()> {
@@ -151,24 +181,5 @@ impl<'info> Deposit<'info> {
         let cpi_ctx = CpiContext::new(self.token_program.key(), cpi_accounts);
 
         transfer_checked(cpi_ctx, amount, decimals)
-    }
-
-    fn mint_lp_tokens(&self, amount: u64) -> Result<()> {
-        let cpi_accounts = MintTo {
-            mint: self.mint_lp.to_account_info(),
-            authority: self.config.to_account_info(),
-            to: self.user_lp.to_account_info(),
-        };
-
-        let signer_seeds: &[&[&[u8]]] = &[&[
-            CONFIG_SEED,
-            &self.config.seed.to_le_bytes(),
-            &[self.config.config_bump],
-        ]];
-
-        let cpi_ctx =
-            CpiContext::new_with_signer(self.token_program.key(), cpi_accounts, signer_seeds);
-
-        mint_to(cpi_ctx, amount)
     }
 }

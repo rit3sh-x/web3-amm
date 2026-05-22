@@ -21,7 +21,7 @@ pub mod amm {
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64, max_x: u64, max_y: u64) -> Result<()> {
-        ctx.accounts.deposit(amount, max_x, max_y)
+        ctx.accounts.deposit(amount, max_x, max_y, &ctx.bumps)
     }
 
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64, min_x: u64, min_y: u64) -> Result<()> {
@@ -30,6 +30,10 @@ pub mod amm {
 
     pub fn swap(ctx: Context<Swap>, direction: SwapDirection, amount: u64, min: u64) -> Result<()> {
         ctx.accounts.swap(direction, amount, min)
+    }
+
+    pub fn collect_fees(ctx: Context<CollectFees>) -> Result<()> {
+        ctx.accounts.collect_fees()
     }
 
     pub fn set_locked(ctx: Context<Admin>, locked: bool) -> Result<()> {

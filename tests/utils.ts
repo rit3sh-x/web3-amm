@@ -8,7 +8,6 @@ import {
     createMintToInstruction,
     getAccount,
     getAssociatedTokenAddressSync,
-    getMint,
     MINT_SIZE,
     TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
@@ -30,9 +29,10 @@ export const MINT_AMOUNT = 1_000_000_000;
 export const MINT_DECIMALS = 6;
 
 export const CONFIG_SEED = Buffer.from("config");
-export const LP_SEED = Buffer.from("lp");
+export const POSITION_SEED = Buffer.from("position");
 
 export type Config = anchor.IdlAccounts<Amm>["config"];
+export type Position = anchor.IdlAccounts<Amm>["position"];
 export type SwapDirection = anchor.IdlTypes<Amm>["swapDirection"];
 
 export type Trade = [User, SwapDirection, number];
@@ -187,18 +187,12 @@ export const tokenBalance = async (ata: PublicKey): Promise<number> => {
     }
 };
 
-export const mintSupply = async (mint: PublicKey): Promise<number> => {
-    const acc = await getMint(provider.connection, mint);
-
-    return Number(acc.supply);
-};
-
 export class User {
     constructor(
         public kp: Keypair,
         public ataA: PublicKey,
         public ataB: PublicKey,
-        public ataLp: PublicKey
+        public position: PublicKey
     ) {}
 
     pubkey() {
@@ -210,7 +204,6 @@ export class AmmAccounts {
     initializer: Keypair;
     mintA: PublicKey;
     mintB: PublicKey;
-    mintLp: PublicKey;
     vaultA: PublicKey;
     vaultB: PublicKey;
     seed: Buffer;
@@ -222,24 +215,17 @@ export class AmmAccounts {
         initializer: Keypair,
         mintA: PublicKey,
         mintB: PublicKey,
-        mintLp: PublicKey,
         vaultA: PublicKey,
         vaultB: PublicKey,
         seed: Buffer,
         config: PublicKey
     ) {
         this.initializer = initializer;
-
         this.mintA = mintA;
         this.mintB = mintB;
-
-        this.mintLp = mintLp;
-
         this.vaultA = vaultA;
         this.vaultB = vaultB;
-
         this.seed = seed;
-
         this.config = config;
     }
 
@@ -257,11 +243,6 @@ export class AmmAccounts {
             program.programId
         );
 
-        const [mintLp] = PublicKey.findProgramAddressSync(
-            [Buffer.from(LP_SEED), config.toBuffer()],
-            program.programId
-        );
-
         const vaultA = getAssociatedTokenAddressSync(mintA, config, true);
 
         const vaultB = getAssociatedTokenAddressSync(mintB, config, true);
@@ -270,12 +251,23 @@ export class AmmAccounts {
             initializer,
             mintA,
             mintB,
-            mintLp,
             vaultA,
             vaultB,
             seed,
             config
         );
+    }
+
+    positionPda(owner: PublicKey): PublicKey {
+        const [pda] = PublicKey.findProgramAddressSync(
+            [
+                Buffer.from(POSITION_SEED),
+                this.config.toBuffer(),
+                owner.toBuffer(),
+            ],
+            program.programId
+        );
+        return pda;
     }
 
     async newUser(fundA: number, fundB: number) {
@@ -295,11 +287,7 @@ export class AmmAccounts {
             kp.publicKey
         );
 
-        const ataLp = await createAta(
-            this.initializer,
-            this.mintLp,
-            kp.publicKey
-        );
+        const position = this.positionPda(kp.publicKey);
 
         if (fundA > 0) {
             await mintTokensToAta(this.initializer, this.mintA, ataA, fundA);
@@ -313,19 +301,28 @@ export class AmmAccounts {
             this.mintedB += fundB;
         }
 
-        return new User(kp, ataA, ataB, ataLp);
+        return new User(kp, ataA, ataB, position);
     }
 
     async k(): Promise<bigint> {
-        const a = await tokenBalance(this.vaultA);
-
-        const b = await tokenBalance(this.vaultB);
-
-        return BigInt(a) * BigInt(b);
+        const cfg = await this.ammState();
+        return (
+            BigInt(cfg.reserveA.toString()) * BigInt(cfg.reserveB.toString())
+        );
     }
 
     async ammState(): Promise<Config> {
         return await program.account.config.fetch(this.config);
+    }
+
+    async positionState(owner: PublicKey): Promise<Position | null> {
+        try {
+            return await program.account.position.fetch(
+                this.positionPda(owner)
+            );
+        } catch {
+            return null;
+        }
     }
 
     initIx(fee: number, authority: PublicKey | null) {
@@ -336,7 +333,6 @@ export class AmmAccounts {
             .accountsStrict({
                 config: this.config,
                 initializer: this.initializer.publicKey,
-                mintLp: this.mintLp,
                 mintA: this.mintA,
                 mintB: this.mintB,
                 vaultA: this.vaultA,
@@ -353,11 +349,10 @@ export class AmmAccounts {
             .deposit(new BN(amount), new BN(maxX), new BN(maxY))
             .accountsStrict({
                 config: this.config,
-                mintLp: this.mintLp,
+                position: user.position,
                 user: user.pubkey(),
                 userA: user.ataA,
                 userB: user.ataB,
-                userLp: user.ataLp,
                 mintA: this.mintA,
                 mintB: this.mintB,
                 vaultA: this.vaultA,
@@ -374,7 +369,6 @@ export class AmmAccounts {
             .swap(direction, new BN(amount), new BN(min))
             .accountsStrict({
                 config: this.config,
-                mintLp: this.mintLp,
                 user: user.pubkey(),
                 userA: user.ataA,
                 userB: user.ataB,
@@ -392,11 +386,10 @@ export class AmmAccounts {
             .withdraw(new BN(amount), new BN(minX), new BN(minY))
             .accountsStrict({
                 config: this.config,
-                mintLp: this.mintLp,
+                position: user.position,
                 user: user.pubkey(),
                 userA: user.ataA,
                 userB: user.ataB,
-                userLp: user.ataLp,
                 mintA: this.mintA,
                 mintB: this.mintB,
                 vaultA: this.vaultA,
@@ -404,6 +397,24 @@ export class AmmAccounts {
                 systemProgram: SystemProgram.programId,
                 tokenProgram: TOKEN_PROGRAM_ID,
                 associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            })
+            .instruction();
+    }
+
+    collectFeesIx(user: User) {
+        return program.methods
+            .collectFees()
+            .accountsStrict({
+                config: this.config,
+                position: user.position,
+                user: user.pubkey(),
+                userA: user.ataA,
+                userB: user.ataB,
+                mintA: this.mintA,
+                mintB: this.mintB,
+                vaultA: this.vaultA,
+                vaultB: this.vaultB,
+                tokenProgram: TOKEN_PROGRAM_ID,
             })
             .instruction();
     }
@@ -449,6 +460,20 @@ export const freshPool = async (fee: number) => {
     await sendTransaction(amm.initializer, tx);
 
     return amm;
+};
+
+export const depositHelper = async (
+    amm: AmmAccounts,
+    lp: User,
+    amount: number
+) => {
+    const cfg = await amm.ammState();
+    const total = Number(cfg.totalLiquidity.toString());
+    const cap = total === 0 ? amount : amount * 4;
+    await sendTransaction(
+        lp.kp,
+        new Transaction().add(await amm.depositIx(lp, amount, cap, cap))
+    );
 };
 
 export const assertTokenConservation = async (

@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 
 #[constant]
-pub const LP_SEED: &[u8] = b"lp";
+pub const CONFIG_SEED: &[u8] = b"config";
 
 #[constant]
-pub const CONFIG_SEED: &[u8] = b"config";
+pub const POSITION_SEED: &[u8] = b"position";
 
 #[constant]
 pub const PRECISION: u32 = 1_000_000;

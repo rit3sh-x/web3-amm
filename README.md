@@ -8,25 +8,30 @@ flowchart LR
     RPC[(Solana RPC)]
     subgraph Chain
       Program[AMM Program]
-      PoolState[(PoolState PDA)]
+      Config[(Config PDA)]
+      Position[(Position PDA per LP)]
       VaultA[(Vault A - token account)]
       VaultB[(Vault B - token account)]
     end
 
     Client -->|submit tx| RPC
     RPC --> Program
-    Program --> PoolState
+    Program --> Config
+    Program --> Position
     Program --> VaultA
     Program --> VaultB
 ```
 
 ## Program instructions
 
-- `init`: create a new pool `Config` PDA, initialize LP mint (`mint_lp`) and token vaults (`vault_a`, `vault_b`). `fee` is in bps and `authority` is an optional admin key.
-- `deposit`: deposit tokens into the pool. `amount` is the amount of LP tokens to mint (when creating liquidity) or desired LP amount to receive; `max_x`/`max_y` are the maximum token A/B the caller is willing to deposit (slippage protection).
-- `withdraw`: burn `amount` LP tokens to withdraw underlying token amounts; `min_x`/`min_y` are minimum acceptable outputs.
-- `swap`: swap tokens. `direction` is `AtoB` or `BtoA`, `amount` is the input amount, and `min` is the minimum acceptable output.
-- `set_locked`: admin instruction to lock or unlock the pool (prevents deposits/withdraws/swaps while locked).
+- `init`: create the `Config` PDA and token vaults. `fee` is in bps and `authority` is an optional admin key.
+- `deposit`: open or grow the caller's `Position`. On first deposit (`total_liquidity == 0`) `(max_x, max_y)` are taken directly as the initial reserves and `amount` is the liquidity minted. On subsequent deposits the proportional `(x, y)` is computed from current reserves and validated against the caller's caps. Any pending fees on an existing position are settled into `fee_owed_*` before liquidity changes late LPs snapshot the current global growth so they earn nothing from past swaps.
+- `withdraw`: settle pending fees, reduce `position.liquidity` and `config.reserve_*` proportionally, then pay the LP `principal + fee_owed` in a single transfer per side. `min_x` / `min_y` are slippage floors on the principal.
+- `swap`: `direction` is `AtoB` or `BtoA`. The curve reads from `config.reserve_*`, the full `amount` (including fee) enters the vault, `reserve_input += after_fee` and `reserve_output -= delta_out`. The fee portion stays in the vault as uncollected fees, and `fee_growth_{input_side}` advances by `(fee << 64) / total_liquidity`. `min` is the minimum acceptable output (slippage).
+- `collect_fees()`: settle pending growth into `fee_owed_*`, transfer those balances from the vault to the LP, then zero `fee_owed_*`. Position liquidity is untouched.
+- `set_locked`: admin pause/unpause deposits, withdrawals, swaps, and fee collection.
+- `set_fee`: admin update the swap fee (bps). Only affects fee taken on swaps after the change; already-accumulated `fee_growth_*` is unaffected.
+- `set_authority`: admin transfer or renounce admin authority.
 
 ## Running tests
 
